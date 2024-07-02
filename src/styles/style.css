@@ -1,0 +1,100 @@
+body, html {
+    height: 100%;
+    background-color: lightgray;
+    margin: 5px;
+}
+
+#request-port-btn {
+    width: 100%;
+    margin-bottom: 5px;
+    margin: none;
+}
+
+#command-history-textarea {
+    box-sizing: border-box;
+    resize: none;
+    margin-top: 5px;
+    width: 100%;
+    height: 15%;
+}
+
+#jog-controls-container {
+    position: relative;
+    height: 170px;
+    width: 170px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+#up-jog-control-btn, #down-jog-control-btn, #left-jog-control-btn, #right-jog-control-btn {
+    width: 50px;
+    height: 50px;
+}
+
+#up-jog-control-btn {
+    position: absolute;
+    left: 60px;
+}
+
+#down-jog-control-btn {
+    position: absolute;
+    left: 60px;
+    top: 120px;
+}
+
+#left-jog-control-btn {
+    position: absolute;
+    top: 60px;
+}
+
+#right-jog-control-btn {
+    position: absolute;
+    top: 60px;
+    left: 120px;
+}
+
+#visualiser-container {
+    user-select: none;
+    position: relative;
+    width: 100%;
+    height: 50%;
+}
+
+#visualiser-controls-container {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    background-color: grey;
+    height: 50px;
+    width: 50px;
+}
+
+#visualiser-coordinates-container {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    background-color: gray;
+    height: 70px;
+    width: 100px;
+    z-index: 99;
+    min-width: max-content;
+}
+
+#visualiser-x-coordinate-text, #visualiser-y-coordinate-text, #visualiser-z-coordinate-text {
+    margin: 2px 2px 2px 4px;
+}
+
+#visualiser-x-coordinate-text {
+    color: rgb(255, 0, 0);
+}
+
+#visualiser-y-coordinate-text {
+    color: rgb(0, 255, 0);
+}
+
+#visualiser-z-coordinate-text {
+    color: rgb(0, 0, 255);
+}

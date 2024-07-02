@@ -1,0 +1,19 @@
+{
+  "name": "web_gcode_sender",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "esbuild ./src/scripts/main.ts --bundle --outfile=./dist/bundle.js",
+    "watch": "esbuild ./src/scripts/main.ts --bundle --outfile=./dist/bundle.js --watch"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "three": "^0.165.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5",
+    "typescript": "^5.5.2"
+  }
+}

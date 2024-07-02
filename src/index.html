@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<head>
+    <title>Web G Code Sender</title>
+    <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+    <button id="request-port-btn">Request port</button>
+    <div id="visualiser-container">
+        <div id="visualiser-controls-container"></div>
+        <div id="visualiser-coordinates-container">
+            <p id="visualiser-x-coordinate-text">x = <span id="visualiser-x-coordinate">0</span></p>
+            <p id="visualiser-y-coordinate-text">y = <span id="visualiser-y-coordinate">0</span></p>
+            <p id="visualiser-z-coordinate-text">z = <span id="visualiser-z-coordinate">0</span></p>
+        </div>
+    </div>
+    <textarea id="command-history-textarea" disabled placeholder="Console"></textarea>
+    <input type="text" id="gcode-command-textbox" placeholder="G1 X10 Y10 F700">
+    <button id="send-gcode-command-btn">Send command</button>
+    <div id="jog-controls-container">
+        <button id="up-jog-control-btn">Up</button>
+        <button id="down-jog-control-btn">Down</button>
+        <button id="left-jog-control-btn">Left</button>
+        <button id="right-jog-control-btn">Right</button>
+    </div>
+    <script type="module" src="../dist/bundle.js"></script>
+</body>
