@@ -17,6 +17,8 @@ const VISUALISER_X_COORDINATE_ID = "visualiser-x-coordinate";
 const VISUALISER_Y_COORDINATE_ID = "visualiser-y-coordinate";
 const VISUALISER_Z_COORDINATE_ID = "visualiser-z-coordinate";
 
+const NOT_FOUND_ERROR_NAME = "NotFoundError";
+
 const UNOPENED_PORT_ALERT_MESSAGE = "You must open a port first!";
 
 // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands#grbl-v11-realtime-commands
@@ -93,7 +95,9 @@ function openPort() {
             alert(`Failed to open port: ${e}`);
         });
     }).catch((e) => {
-        console.error(`Error requesting port: ${e}`);
+        if (e.name != NOT_FOUND_ERROR_NAME) { // NotFoundError suggests request port prompt was dismissed by the user.
+            console.log(`Failed to request port: ${e}`);
+        }
     });
 }
 
