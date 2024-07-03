@@ -1,7 +1,6 @@
 import { parseCommand } from "./gcodeParser";
+import * as GRBL from "./grbl";
 import { MotionMode, DistanceMode, UnitMode } from "./types";
-
-const STATUS_REPORT_POS_REGEX = /-?[0-9]+\.[0-9]+,-?[0-9]+\.[0-9]+,=?[0-9]+\.[0-9]+/;
 
 class MachineState {
 
@@ -10,33 +9,44 @@ class MachineState {
     distanceMode: DistanceMode;
     unitMode: UnitMode;
     motionMode: MotionMode;
-    commandQueue: string[];
+    #bufferLineCharCounts: number[];
+    #numOfCharsInBuffer: number
 
     constructor() {
         this.pos = { x: 0, y: 0, z: 0 };
         this.distanceMode = DistanceMode.Abs;
         this.motionMode = MotionMode.Linear;
         this.unitMode = UnitMode.Milimeter;
+        this.#bufferLineCharCounts = [];
+        this.#numOfCharsInBuffer = 0;
     }
 
-    // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Interface#status-reporting
-    registerStatusReport(statusReport: string) {
-        const coordinates = STATUS_REPORT_POS_REGEX.exec(statusReport)?.[0].split(",");
-        if (coordinates) {
-            this.pos.x = parseFloat(coordinates[0]);
-            this.pos.y = parseFloat(coordinates[1]);
-            this.pos.z = parseFloat(coordinates[2]);
+    commandWillOverflowBuffer(command: Uint8Array) {
+        return !GRBL.REALTIME_COMMANDS.has(command) && (this.#numOfCharsInBuffer + command.length) >= GRBL.CHAR_BUFFER_LIMIT;
+    }
+
+    registerMessage(message: string) {
+        if (message.startsWith(GRBL.OK_MESSAGE) || message.startsWith(GRBL.ERROR_MESSAGE)) {
+            this.#popBufferLine();
+        } else if (message.indexOf("MPos:") != -1) {
+            this.#registerStatusReport(message);
         }
-        STATUS_REPORT_POS_REGEX.lastIndex = 0;
     }
 
     // Reference: https://machmotion.com/downloads/GCode/Mach4-G-and-M-Code-Reference-Manual.pdf
-    registerCommand(command: string) {
-        if (command.startsWith("$")) {
-            this.#registerSystemCommand(command);
+    registerCommand(command: Uint8Array) {
+        const textDecoder = new TextDecoder();
+        const commandText = textDecoder.decode(command);
+        if (commandText.startsWith("$")) {
+            this.#pushBufferLine(command);
+            this.#registerSystemCommand(commandText);
+        } else if (GRBL.REALTIME_COMMANDS.has(command)) {
+            // Do not place in buffer - "Realtime commands are intercepted when they are received and never placed in a buffer to be parsed by Grbl"
+            // TODO: Handle registering realtime commands
         } else {
+            this.#pushBufferLine(command);
             try {
-                const commandWords = parseCommand(command);
+                const commandWords = parseCommand(commandText);
                 commandWords.forEach((word) => {
                     switch (word[0]) {
                         case "G":
@@ -51,15 +61,35 @@ class MachineState {
                     }
                 });
             } catch (e) {
-                console.error(`Command "${command}" not registered: ${e}`);
+                console.error(`Command "${commandText}" not registered: ${e}`);
             }
         }
     }
 
+    #pushBufferLine(command: Uint8Array) {
+        this.#numOfCharsInBuffer += command.length;
+        this.#bufferLineCharCounts.push(command.length);
+    }
+
+    #popBufferLine() {
+        this.#numOfCharsInBuffer -= this.#bufferLineCharCounts.pop() ?? 0;
+    }
+
+    // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Interface#status-reporting
+    #registerStatusReport(statusReport: string) {
+        const coordinates = GRBL.STATUS_REPORT_POS_REGEX.exec(statusReport)?.[0].split(",");
+        if (coordinates) {
+            this.pos.x = parseFloat(coordinates[0]);
+            this.pos.y = parseFloat(coordinates[1]);
+            this.pos.z = parseFloat(coordinates[2]);
+        }
+        GRBL.STATUS_REPORT_POS_REGEX.lastIndex = 0;
+    }
+
     // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands
-    #registerSystemCommand(command: string) {
-        if (command.startsWith("$J=")) {
-            this.#registerJogCommand(command.substring(3));
+    #registerSystemCommand(commandText: string) {
+        if (commandText.startsWith("$J=")) {
+            this.#registerJogCommand(commandText.substring(3));
         }
     }
 
@@ -110,7 +140,7 @@ class MachineState {
                 }
             });
         } catch (e) {
-            console.log(e);
+            console.error(`Invalid jog command: ${command}`);
         }
     }
 }

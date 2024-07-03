@@ -1,12 +1,12 @@
-import { getJogButtonId, updateTextAreaScrollTop } from "./util.js";
+import { getJogButtonId } from "./util.js";
 import { Visualiser } from "./Visualiser.js";
 import { MachineState } from "./MachineState.js";
+import * as GRBL from "./grbl.js";
 
 // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands
 const BAUD_RATE = 115200;
 
 const TEXT_ENCODER = new TextEncoder();
-const TEXT_DECODER = new TextDecoder();
 
 const GCODE_COMMAND_TEXTBOX_ID = "gcode-command-textbox";
 const COMMAND_HISTORY_TEXTAREA_ID = "command-history-textarea";
@@ -21,10 +21,6 @@ const NOT_FOUND_ERROR_NAME = "NotFoundError";
 
 const UNOPENED_PORT_ALERT_MESSAGE = "You must open a port first!";
 
-// Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands#grbl-v11-realtime-commands
-const CANCEL_JOG_COMMAND = new Uint8Array([0x85]);
-const STATUS_REPORT_QUERY_COMMAND = TEXT_ENCODER.encode("?");
-
 const UP_DIR = "up";
 const DOWN_DIR = "down";
 const LEFT_DIR = "left";
@@ -33,20 +29,17 @@ const RIGHT_DIR = "right";
 const JOG_INCREMENT = 2;
 const JOG_STATE = { [UP_DIR]: false, [DOWN_DIR]: false, [LEFT_DIR]: false, [RIGHT_DIR]: false };
 
-let openedPort;
+let port;
 let machineState: MachineState;
 let visualiser: Visualiser;
+let commandQueue;
 
 function init() {
-    addEventListeners();
+    commandQueue = [];
     machineState = new MachineState();
+    addEventListeners();
     updateCoordinateText();
     visualiser = new Visualiser(document.getElementById(VISUALISER_CONTAINER_ID) ?? document.body, machineState);
-}
-
-async function sendStatusCommand() {
-    await writeCommand(openedPort, STATUS_REPORT_QUERY_COMMAND);
-    setTimeout(async () => await sendStatusCommand(), 250);
 }
 
 function updateCoordinateText() {
@@ -67,11 +60,12 @@ function updateCoordinateText() {
 
 function addEventListeners() {
     document.getElementById(REQUEST_PORT_BUTTON_ID)?.addEventListener("click", () => openPort());
-    document.getElementById(SEND_GCODE_COMMAND_BUTTON_ID)?.addEventListener("click", () => sendTextCommand((<HTMLInputElement> document.getElementById(GCODE_COMMAND_TEXTBOX_ID))?.value));
-    document.getElementById(getJogButtonId(UP_DIR))?.addEventListener("mousedown", () => startJog(UP_DIR));
-    document.getElementById(getJogButtonId(DOWN_DIR))?.addEventListener("mousedown", () => startJog(DOWN_DIR));
-    document.getElementById(getJogButtonId(LEFT_DIR))?.addEventListener("mousedown", () => startJog(LEFT_DIR));
-    document.getElementById(getJogButtonId(RIGHT_DIR))?.addEventListener("mousedown", () => startJog(RIGHT_DIR));
+    document.getElementById(SEND_GCODE_COMMAND_BUTTON_ID)?.addEventListener("click", async () =>
+                            await sendTextCommand((<HTMLInputElement> document.getElementById(GCODE_COMMAND_TEXTBOX_ID))?.value));
+    document.getElementById(getJogButtonId(UP_DIR))?.addEventListener("mousedown", async () => await startJog(UP_DIR));
+    document.getElementById(getJogButtonId(DOWN_DIR))?.addEventListener("mousedown", async () => await startJog(DOWN_DIR));
+    document.getElementById(getJogButtonId(LEFT_DIR))?.addEventListener("mousedown", async () => await startJog(LEFT_DIR));
+    document.getElementById(getJogButtonId(RIGHT_DIR))?.addEventListener("mousedown", async () => await startJog(RIGHT_DIR));
     document.addEventListener("mouseup", () => {
         for (const direction in JOG_STATE) {
             if (JOG_STATE[direction]) {
@@ -81,69 +75,70 @@ function addEventListeners() {
     });
 }
 
-function openPort() {
-    navigator.serial.requestPort().then((port) => {
-        port.open({ baudRate: BAUD_RATE, dataBits: 8, stopBits: 1, parity: "none" }).then(() => {
-            openedPort = port;
-            beginReading();
-            sendStatusCommand();
-            const requestPortButton = document.getElementById(REQUEST_PORT_BUTTON_ID);
-            if (requestPortButton) {
-                requestPortButton.innerHTML = `Request port (currently open: {pid = ${port.getInfo().usbProductId}, vid = ${port.getInfo().usbVendorId}})`;
-            }
-        }).catch((e) => {
-            alert(`Failed to open port: ${e}`);
-        });
-    }).catch((e) => {
-        if (e.name != NOT_FOUND_ERROR_NAME) { // NotFoundError suggests request port prompt was dismissed by the user.
-            console.log(`Failed to request port: ${e}`);
+async function openPort() {
+    try {
+        port = await navigator.serial.requestPort()
+        await port.open({ baudRate: BAUD_RATE, dataBits: 8, stopBits: 1, parity: "none" });
+        await setDefaultSettings(port);
+        beginReading(port); // Initiates reading loop
+        pollStatus(port); // Initiates status poll loop
+        const requestPortButton = document.getElementById(REQUEST_PORT_BUTTON_ID);
+        if (requestPortButton) {
+            requestPortButton.innerHTML = `Request port (currently open: {pid = ${port.getInfo().usbProductId}, vid = ${port.getInfo().usbVendorId}})`;
         }
-    });
+    } catch (e) {
+        if (e.name != NOT_FOUND_ERROR_NAME) { // NotFoundError suggests request port prompt was dismissed by the user.
+            console.error(`Failed to request port: ${e}`);
+        }
+    }
 }
 
-async function beginReading() {
+async function setDefaultSettings(port) {
+    await writeCommand(port, new TextEncoder().encode(`${GRBL.STATUS_REPORT_MASK_SETTING}=1\n`)); // Include machine position in status report
+}
+
+async function beginReading(port) {
     const commandHistoryTextareaHtml = <HTMLInputElement> document.getElementById(COMMAND_HISTORY_TEXTAREA_ID);
-    while (openedPort.readable) {
-        const reader = openedPort.readable.getReader();
-        const dataBuffer: any[] = [];
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-              break;
+    const reader = port.readable.getReader();
+    try {
+        while (port.readable) {
+            const messages = await GRBL.readBuffer(reader);
+            if (!messages) {
+                break;
             }
-            dataBuffer.push(...value);
-            if (dataBuffer[dataBuffer.length - 1] == "\n".charCodeAt(0)) {
-                const output = TEXT_DECODER.decode(new Uint8Array(dataBuffer));
-                if (output.indexOf("MPos:") === -1) {
-                    if (commandHistoryTextareaHtml) {
-                        commandHistoryTextareaHtml.value += output;
-                    }
-                    updateTextAreaScrollTop(COMMAND_HISTORY_TEXTAREA_ID)
-                } else {
-                    machineState.registerStatusReport(output);
+            for (const message of messages) {
+                machineState.registerMessage(message);
+                if (message.startsWith(GRBL.OK_MESSAGE) && commandQueue.length > 0) {
+                    await writeCommand(port, commandQueue.pop());
                 }
-                dataBuffer.length = 0;
+                commandHistoryTextareaHtml.value += message;
             }
-          }
-        } catch (e) {
-          console.error(`Error while reading port: ${e}`);
-        } finally {
-          reader.releaseLock();
         }
-      }
+    } catch (e) {
+        console.error(`Error reading buffer: ${e}`);
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+// Recommended max poll frequency is 5Hz (https://github.com/gnea/grbl/wiki/Grbl-v1.1-Interface#status-reporting)
+async function pollStatus(port) {
+    await writeCommand(port, GRBL.STATUS_REPORT_QUERY_COMMAND);
+    setTimeout(async () => await pollStatus(port), 250);
 }
 
 async function writeCommand(port, command: Uint8Array) {
-    const writer = port.writable.getWriter();
-    await writer.write(command);
-    writer.releaseLock();
-    machineState.registerCommand(command.toString());
+    if (machineState.commandWillOverflowBuffer(command)) { // Queue up commands that would otherwise potentially cause a buffer overflow
+        commandQueue.push(command);
+    } else {
+        await GRBL.writeCommand(port, command);
+        machineState.registerCommand(command);
+    }
 }
 
 async function sendTextCommand(commandText: string) {
-    if (openedPort) {
-        await writeCommand(openedPort, TEXT_ENCODER.encode(commandText + "\n"));
+    if (port) {
+        await writeCommand(port, TEXT_ENCODER.encode(commandText + "\n"));
         const gCodeCommandTextboxHtml = <HTMLInputElement> document.getElementById(GCODE_COMMAND_TEXTBOX_ID);
         const commandHistoryTextareaHtml = <HTMLInputElement> document.getElementById(COMMAND_HISTORY_TEXTAREA_ID);
         if (gCodeCommandTextboxHtml && commandHistoryTextareaHtml) {
@@ -155,8 +150,8 @@ async function sendTextCommand(commandText: string) {
     }
 }
 
-function startJog(direction: string) {
-    if (openedPort) {
+async function startJog(direction: string) {
+    if (port) {
         let relative_coordinates = "X0 Y0";
         switch (direction) {
             case "up":
@@ -173,20 +168,20 @@ function startJog(direction: string) {
                 break;
         }
         JOG_STATE[direction] = true;
-        jog(direction, `$J=G91 ${relative_coordinates} F300`);
+        await jog(direction, `$J=G91 ${relative_coordinates} F300`);
     } else {
         alert(UNOPENED_PORT_ALERT_MESSAGE);
     }
 }
 
-function jog(direction: string, jogCommand: string) {
+async function jog(direction: string, jogCommand: string) {
     const buttonElement = document.getElementById(getJogButtonId(direction));
     if (JOG_STATE[direction] && buttonElement?.matches(":hover")) {
-        writeCommand(openedPort, TEXT_ENCODER.encode(jogCommand + "\n"));
+        await writeCommand(port, TEXT_ENCODER.encode(jogCommand + "\n"));
         setTimeout(() => jog(direction, jogCommand), 100);
     } else {
         JOG_STATE[direction] = false;
-        writeCommand(openedPort, CANCEL_JOG_COMMAND);
+        await writeCommand(port, GRBL.CANCEL_JOG_COMMAND);
     }
 }
 
