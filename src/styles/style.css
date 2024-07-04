@@ -19,14 +19,21 @@ body, html {
 }
 
 #jog-controls-container {
+    margin-left: auto;
+    margin-right: auto;
+    height: fit-content;
+    width: fit-content;
+    padding: 10px;
+}
+
+#jog-control-btns-container {
     position: relative;
     height: 170px;
     width: 170px;
-    margin-left: auto;
-    margin-right: auto;
+    margin-bottom: 10px;
 }
 
-#up-jog-control-btn, #down-jog-control-btn, #left-jog-control-btn, #right-jog-control-btn {
+#up-jog-control-btn, #down-jog-control-btn, #left-jog-control-btn, #right-jog-control-btn, #cancel-jog-btn {
     width: 50px;
     height: 50px;
 }
@@ -51,6 +58,18 @@ body, html {
     position: absolute;
     top: 60px;
     left: 120px;
+}
+
+#cancel-jog-btn {
+    position: absolute;
+    top: 60px;
+    left: 60px;
+    color: red;
+}
+
+#jog-configuration-container {
+    display: flex;
+    column-gap: 10px;
 }
 
 #visualiser-container {

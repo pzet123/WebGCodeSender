@@ -17,10 +17,31 @@
     <input type="text" id="gcode-command-textbox" placeholder="G1 X10 Y10 F700">
     <button id="send-gcode-command-btn">Send command</button>
     <div id="jog-controls-container">
-        <button id="up-jog-control-btn">Up</button>
-        <button id="down-jog-control-btn">Down</button>
-        <button id="left-jog-control-btn">Left</button>
-        <button id="right-jog-control-btn">Right</button>
+        <div id="jog-control-btns-container">
+            <button id="up-jog-control-btn">+Y</button>
+            <button id="down-jog-control-btn">-Y</button>
+            <button id="left-jog-control-btn">-X</button>
+            <button id="right-jog-control-btn">+X</button>
+            <button id="cancel-jog-btn">&#x2716;</button>
+        </div>
+        <div id="jog-configuration-container">
+            <div id="jog-increment-container">
+                <label for="jog-increment-select">Increment</label> <br />
+                <select id="jog-increment-select" name="jog increment">
+                    <option value="1" selected>1</option>
+                    <option value="5">5</option>
+                    <option value="10">10</option>
+                </select>
+            </div>
+            <div id="jog-feedrate-container">
+                <label for="jog-feedrate-select">Feedrate</label> <br />
+                <select id="jog-feedrate-select">
+                    <option value="300">300</option>
+                    <option value="500">500</option>
+                    <option value="700">700</option>
+                </select>
+            </div>
+        </div>
     </div>
     <script type="module" src="../dist/bundle.js"></script>
 </body>

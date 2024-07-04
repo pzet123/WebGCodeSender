@@ -1,3 +1,10 @@
+enum Direction {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT
+}
+
 enum DistanceMode {
     Abs,
     Inc
@@ -15,4 +22,4 @@ enum UnitMode {
     Milimeter
 }
 
-export { DistanceMode, MotionMode, UnitMode }
+export { DistanceMode, MotionMode, UnitMode, Direction }

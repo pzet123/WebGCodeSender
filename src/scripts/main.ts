@@ -2,6 +2,7 @@ import { getJogButtonId } from "./util.js";
 import { Visualiser } from "./Visualiser.js";
 import { MachineState } from "./MachineState.js";
 import * as GRBL from "./grbl.js";
+import { Direction } from "./types.js";
 
 // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands
 const BAUD_RATE = 115200;
@@ -16,27 +17,30 @@ const VISUALISER_CONTAINER_ID = "visualiser-container";
 const VISUALISER_X_COORDINATE_ID = "visualiser-x-coordinate";
 const VISUALISER_Y_COORDINATE_ID = "visualiser-y-coordinate";
 const VISUALISER_Z_COORDINATE_ID = "visualiser-z-coordinate";
+const JOG_CANCEL_BUTTON_ID = "cancel-jog-btn";
+const JOG_INCREMENT_SELECT_ID = "jog-increment-select";
+const JOG_FEEDRATE_SELECT_ID = "jog-feedrate-select";
 
 const NOT_FOUND_ERROR_NAME = "NotFoundError";
 
 const UNOPENED_PORT_ALERT_MESSAGE = "You must open a port first!";
 
-const UP_DIR = "up";
-const DOWN_DIR = "down";
-const LEFT_DIR = "left";
-const RIGHT_DIR = "right";
-
-const JOG_INCREMENT = 2;
-const JOG_STATE = { [UP_DIR]: false, [DOWN_DIR]: false, [LEFT_DIR]: false, [RIGHT_DIR]: false };
+const DEFAULT_JOG_INCREMENT = 1;
+const DEFAULT_JOG_FEEDRATE = 300;
 
 let port;
 let machineState: MachineState;
 let visualiser: Visualiser;
-let commandQueue;
+let commandQueue: Uint8Array[];
+let debounceTimeout;
+let jogIncrement;
+let jogFeedrate;
 
 function init() {
     commandQueue = [];
     machineState = new MachineState();
+    jogIncrement = DEFAULT_JOG_INCREMENT;
+    jogFeedrate = DEFAULT_JOG_FEEDRATE;
     addEventListeners();
     updateCoordinateText();
     visualiser = new Visualiser(document.getElementById(VISUALISER_CONTAINER_ID) ?? document.body, machineState);
@@ -60,19 +64,30 @@ function updateCoordinateText() {
 
 function addEventListeners() {
     document.getElementById(REQUEST_PORT_BUTTON_ID)?.addEventListener("click", () => openPort());
-    document.getElementById(SEND_GCODE_COMMAND_BUTTON_ID)?.addEventListener("click", async () =>
-                            await sendTextCommand((<HTMLInputElement> document.getElementById(GCODE_COMMAND_TEXTBOX_ID))?.value));
-    document.getElementById(getJogButtonId(UP_DIR))?.addEventListener("mousedown", async () => await startJog(UP_DIR));
-    document.getElementById(getJogButtonId(DOWN_DIR))?.addEventListener("mousedown", async () => await startJog(DOWN_DIR));
-    document.getElementById(getJogButtonId(LEFT_DIR))?.addEventListener("mousedown", async () => await startJog(LEFT_DIR));
-    document.getElementById(getJogButtonId(RIGHT_DIR))?.addEventListener("mousedown", async () => await startJog(RIGHT_DIR));
-    document.addEventListener("mouseup", () => {
-        for (const direction in JOG_STATE) {
-            if (JOG_STATE[direction]) {
-                JOG_STATE[direction] = false;
-            }
-        }
-    });
+    document.getElementById(SEND_GCODE_COMMAND_BUTTON_ID)?.addEventListener("click", () =>
+                sendTextCommand((<HTMLInputElement> document.getElementById(GCODE_COMMAND_TEXTBOX_ID))?.value));
+    document.getElementById(getJogButtonId(Direction.UP))?.addEventListener("mousedown", () => debounceJog(Direction.UP));
+    document.getElementById(getJogButtonId(Direction.DOWN))?.addEventListener("mousedown", () => debounceJog(Direction.DOWN));
+    document.getElementById(getJogButtonId(Direction.LEFT))?.addEventListener("mousedown", () => debounceJog(Direction.LEFT));
+    document.getElementById(getJogButtonId(Direction.RIGHT))?.addEventListener("mousedown", () => debounceJog(Direction.RIGHT));
+    document.getElementById(JOG_CANCEL_BUTTON_ID)?.addEventListener("mousedown", () => cancelJog());
+    document.getElementById(JOG_INCREMENT_SELECT_ID)?.addEventListener("change", () =>
+                jogIncrement = parseInt((<HTMLSelectElement> document.getElementById(JOG_INCREMENT_SELECT_ID))?.value ?? DEFAULT_JOG_INCREMENT));
+    document.getElementById(JOG_FEEDRATE_SELECT_ID)?.addEventListener("change", () =>
+                jogFeedrate = parseInt((<HTMLSelectElement> document.getElementById(JOG_FEEDRATE_SELECT_ID))?.value ?? DEFAULT_JOG_INCREMENT));
+}
+
+async function debounceJog(direction: Direction, timeout = 200) {
+    if (port) {
+        clearInterval(debounceTimeout);
+        debounceTimeout = setTimeout(() => jog(direction), timeout);
+    } else {
+        alert(UNOPENED_PORT_ALERT_MESSAGE);
+    }
+}
+
+async function cancelJog() {
+    await writeCommand(port, GRBL.CANCEL_JOG_COMMAND);
 }
 
 async function openPort() {
@@ -94,6 +109,7 @@ async function openPort() {
 }
 
 async function setDefaultSettings(port) {
+    await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds to ensure controller is ready to accept commands.
     await writeCommand(port, new TextEncoder().encode(`${GRBL.STATUS_REPORT_MASK_SETTING}=1\n`)); // Include machine position in status report
 }
 
@@ -150,39 +166,23 @@ async function sendTextCommand(commandText: string) {
     }
 }
 
-async function startJog(direction: string) {
-    if (port) {
-        let relative_coordinates = "X0 Y0";
-        switch (direction) {
-            case "up":
-                relative_coordinates = `X0 Y${JOG_INCREMENT}`;
-                break;
-            case "down":
-                relative_coordinates = `X0 Y${-JOG_INCREMENT}`;
-                break;
-            case "left":
-                relative_coordinates = `X${-JOG_INCREMENT} Y0`;
-                break;
-            case "right":
-                relative_coordinates = `X${JOG_INCREMENT} Y0`;
-                break;
-        }
-        JOG_STATE[direction] = true;
-        await jog(direction, `$J=G91 ${relative_coordinates} F300`);
-    } else {
-        alert(UNOPENED_PORT_ALERT_MESSAGE);
+async function jog(direction: Direction) {
+    let relative_coordinates = "X0 Y0";
+    switch (direction) {
+        case Direction.UP:
+            relative_coordinates = `X0 Y${jogIncrement}`;
+            break;
+        case Direction.DOWN:
+            relative_coordinates = `X0 Y${-jogIncrement}`;
+            break;
+        case Direction.LEFT:
+            relative_coordinates = `X${-jogIncrement} Y0`;
+            break;
+        case Direction.RIGHT:
+            relative_coordinates = `X${jogIncrement} Y0`;
+            break;
     }
-}
-
-async function jog(direction: string, jogCommand: string) {
-    const buttonElement = document.getElementById(getJogButtonId(direction));
-    if (JOG_STATE[direction] && buttonElement?.matches(":hover")) {
-        await writeCommand(port, TEXT_ENCODER.encode(jogCommand + "\n"));
-        setTimeout(() => jog(direction, jogCommand), 100);
-    } else {
-        JOG_STATE[direction] = false;
-        await writeCommand(port, GRBL.CANCEL_JOG_COMMAND);
-    }
+    await writeCommand(port, TEXT_ENCODER.encode(`$J=G91 ${relative_coordinates} F${jogFeedrate}\n`));
 }
 
 init();
