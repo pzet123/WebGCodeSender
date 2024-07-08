@@ -22,4 +22,10 @@ enum UnitMode {
     Milimeter
 }
 
-export { DistanceMode, MotionMode, UnitMode, Direction }
+type Vec3 = {
+    x: number;
+    y: number;
+    z: number;
+};
+
+export { DistanceMode, MotionMode, UnitMode, Direction, Vec3 }

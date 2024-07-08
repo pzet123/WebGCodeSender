@@ -6,7 +6,12 @@
 <body>
     <button id="request-port-btn">Request port</button>
     <div id="visualiser-container">
-        <div id="visualiser-controls-container"></div>
+        <div id="visualiser-controls-container">
+            <label>
+                <input type="checkbox" id="simulate-motion-checkbox">
+                Simulate motion
+            </label>
+        </div>
         <div id="visualiser-coordinates-container">
             <p id="visualiser-x-coordinate-text">x = <span id="visualiser-x-coordinate">0</span></p>
             <p id="visualiser-y-coordinate-text">y = <span id="visualiser-y-coordinate">0</span></p>
@@ -16,6 +21,7 @@
     <textarea id="command-history-textarea" disabled placeholder="Console"></textarea>
     <input type="text" id="gcode-command-textbox" placeholder="G1 X10 Y10 F700">
     <button id="send-gcode-command-btn">Send command</button>
+    <br>
     <div id="jog-controls-container">
         <div id="jog-control-btns-container">
             <button id="up-jog-control-btn">+Y</button>

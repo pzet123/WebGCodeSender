@@ -1,16 +1,22 @@
 import { parseCommand } from "./gcodeParser";
 import * as GRBL from "./grbl";
-import { MotionMode, DistanceMode, UnitMode } from "./types";
+import { MotionMode, DistanceMode, UnitMode, Vec3 } from "./types";
+
+const SIMULATION_UPDATE_INTERVAL_MS = 25;
 
 class MachineState {
 
-    pos: {x: number, y: number, z: number};
-    feedRate: number; // TODO: Implement feed rate
+    pos: Vec3;
+    feedRate: number;
     distanceMode: DistanceMode;
     unitMode: UnitMode;
     motionMode: MotionMode;
     #bufferLineCharCounts: number[];
-    #numOfCharsInBuffer: number
+    #numOfCharsInBuffer: number;
+    #simulationTimeoutId: number;
+    #motionSimulationEnabled: boolean;
+    #inMotion: boolean;
+    #motionCommandQueue: Uint8Array[];
 
     constructor() {
         this.pos = { x: 0, y: 0, z: 0 };
@@ -19,10 +25,13 @@ class MachineState {
         this.unitMode = UnitMode.Milimeter;
         this.#bufferLineCharCounts = [];
         this.#numOfCharsInBuffer = 0;
+        this.#motionSimulationEnabled = false;
+        this.#inMotion = false;
+        this.#motionCommandQueue = [];
     }
 
     commandWillOverflowBuffer(command: Uint8Array) {
-        return !GRBL.REALTIME_COMMANDS.has(command) && (this.#numOfCharsInBuffer + command.length) >= GRBL.CHAR_BUFFER_LIMIT;
+        return !this.#isRealtimeCommand(command) && (this.#numOfCharsInBuffer + command.length) >= GRBL.CHAR_BUFFER_LIMIT;
     }
 
     registerMessage(message: string) {
@@ -37,12 +46,14 @@ class MachineState {
     registerCommand(command: Uint8Array) {
         const textDecoder = new TextDecoder();
         const commandText = textDecoder.decode(command);
+        const motionVec: Partial<Vec3> = {};
+        let isMotionCommand = false;
         if (commandText.startsWith("$")) {
             this.#pushBufferLine(command);
-            this.#registerSystemCommand(commandText);
-        } else if (GRBL.REALTIME_COMMANDS.has(command)) {
+            this.#registerSystemCommand(command);
+        } else if (this.#isRealtimeCommand(command)) {
             // Do not place in buffer - "Realtime commands are intercepted when they are received and never placed in a buffer to be parsed by Grbl"
-            // TODO: Handle registering realtime commands
+            this.#registerRealtimeCommand(command[0]); // Realtime commands are always a single character
         } else {
             this.#pushBufferLine(command);
             try {
@@ -53,17 +64,33 @@ class MachineState {
                             this.#registerGCode(word.join(""));
                             break
                         case "X": case "Y": case "Z":
-                            this.#registerMotion(word[0], word[1]);
+                            motionVec[word[0].toLowerCase()] = word[1];
+                            isMotionCommand = true;
                             break;
                         case "F":
                             this.feedRate = word[1];
                             break;
                     }
                 });
+                if (isMotionCommand && this.#motionSimulationEnabled) {
+                    if (this.#inMotion) {
+                        this.#motionCommandQueue.push(command);
+                    } else {
+                        this.#registerMotion(motionVec);
+                    }
+                }
             } catch (e) {
                 console.error(`Command "${commandText}" not registered: ${e}`);
             }
         }
+    }
+
+    toggleMotionSimulation () {
+        if (this.#motionSimulationEnabled) {
+            this.#inMotion = false;
+            this.#motionCommandQueue.length = 0;
+        }
+        this.#motionSimulationEnabled = !this.#motionSimulationEnabled;
     }
 
     #pushBufferLine(command: Uint8Array) {
@@ -87,9 +114,20 @@ class MachineState {
     }
 
     // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands
-    #registerSystemCommand(commandText: string) {
-        if (commandText.startsWith("$J=")) {
-            this.#registerJogCommand(commandText.substring(3));
+    #registerSystemCommand(command: Uint8Array) {
+        const commandText = new TextDecoder().decode(command);
+        if (commandText.startsWith(GRBL.JOG_COMMAND_PREFIX)) {
+            this.#registerJogCommand(command);
+        }
+    }
+
+    #registerRealtimeCommand(command: number) {
+        switch (command) {
+            case GRBL.CANCEL_JOG_COMMAND:
+                this.#inMotion = false;
+                clearTimeout(this.#simulationTimeoutId); // Cancel simulation upon cancelling jog
+                this.#clearQueuedJogCommands();
+                break;
         }
     }
 
@@ -105,18 +143,75 @@ class MachineState {
         }
     }
 
-    // TODO: Use motion commands to improve on the accuracy of the current tool position
-    #registerMotion(axis: string, magnitude: number) {
+    // TODO: Simulate acceleraton to avoid the tool visualiser rubber-banding at the beginning and end of the motion.
+    #registerMotion(motionVec: Partial<Vec3>) {
+        switch (this.motionMode) {
+            case MotionMode.Rapid:
+                //TODO: Implement
+                break;
+            case MotionMode.Linear:
+                this.#beginLinearMotionSimulation(motionVec);
+                break;
+            case MotionMode.ClockwiseArc:
+                //TODO: Implement
+                break;
+            case MotionMode.CounterClockwiseArc:
+                //TODO: Implement
+                break;
+        }
+    }
 
+    #beginLinearMotionSimulation(motionVec: Partial<Vec3>, feedrate?: number, distanceMode?: DistanceMode) {
+        this.#inMotion = true;
+        feedrate ??= this.feedRate;
+        distanceMode ??= this.distanceMode;
+        if (distanceMode === DistanceMode.Abs) {
+            motionVec.x = motionVec.x !== undefined ? motionVec.x - this.pos.x : 0;
+            motionVec.y = motionVec.y !== undefined ? motionVec.y - this.pos.y : 0;
+            motionVec.z = motionVec.z !== undefined ? motionVec.z - this.pos.z : 0;
+        } else {
+            motionVec.x ??= 0;
+            motionVec.y ??= 0;
+            motionVec.z ??= 0;
+        }
+        const totalDistance = Math.sqrt(motionVec.x ** 2 + motionVec.y ** 2 + motionVec.z ** 2);
+        if (totalDistance > 0) {
+            const feedratePerMs = feedrate / 60000; // Convert from per minute to per millisecond
+            const axesFeedrate = { x: (motionVec.x / totalDistance) * feedratePerMs, y: (motionVec.y / totalDistance) * feedratePerMs, z: (motionVec.z / totalDistance) * feedratePerMs };
+            const stepVec = { x: axesFeedrate.x * SIMULATION_UPDATE_INTERVAL_MS, y: axesFeedrate.y * SIMULATION_UPDATE_INTERVAL_MS, z: axesFeedrate.z * SIMULATION_UPDATE_INTERVAL_MS };
+            const stepDistance = Math.sqrt(stepVec.x ** 2 + stepVec.y ** 2 + stepVec.z ** 2);
+            this.#simulateLinearMotion({ ...this.pos }, stepVec, stepDistance, totalDistance, 0);
+        }
+    }
+
+    #simulateLinearMotion(startVec: Vec3, stepVec: Vec3, stepDistance: number, totalDistance: number, distanceTravelled: number) {
+        this.#simulationTimeoutId = setTimeout(() => {
+            this.pos.x += stepVec.x;
+            this.pos.y += stepVec.y;
+            this.pos.z += stepVec.z;
+            distanceTravelled = Math.sqrt((this.pos.x - startVec.x) ** 2 + (this.pos.y - startVec.y) ** 2 + (this.pos.z - startVec.z) ** 2);
+            if (this.#motionSimulationEnabled) {
+                if (distanceTravelled < (totalDistance - stepDistance)) {
+                    this.#simulateLinearMotion(startVec, stepVec, stepDistance, totalDistance, distanceTravelled);
+                } else {
+                    this.#inMotion = false;
+                    if (this.#motionCommandQueue.length > 0) {
+                        this.registerCommand(this.#motionCommandQueue.shift()!);
+                    }
+                }
+            }
+        }, SIMULATION_UPDATE_INTERVAL_MS);
     }
 
     // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Jogging
-    #registerJogCommand(command: string) {
+    #registerJogCommand(command: Uint8Array) {
+        const commandText = new TextDecoder().decode(command);
         let jogDistanceMode = this.distanceMode;
         let jogUnitMode = this.unitMode;
         let jogFeedRate = this.feedRate;
+        let jogMotionVec: Partial<Vec3> = {};
         try {
-            const commandWords = parseCommand(command.substring(3));
+            const commandWords = parseCommand(commandText.substring(3));
             commandWords.forEach((word) => {
                 switch (word[0]) {
                     case "G":
@@ -130,18 +225,36 @@ class MachineState {
                         } else if (gCode === "G91") {
                             jogDistanceMode = DistanceMode.Inc;
                         }
-                        break
+                        break;
                     case "X": case "Y": case "Z":
-                            // TODO: Use jog commands to improve on the accuracy of the current tool position
+                        jogMotionVec[word[0].toLowerCase()] = word[1];
                         break;
                     case "F":
                         jogFeedRate = word[1];
                         break;
                 }
             });
+            if (this.#motionSimulationEnabled) {
+                if (this.#inMotion) {
+                    this.#motionCommandQueue.push(command);
+                } else {
+                    this.#beginLinearMotionSimulation(jogMotionVec, jogFeedRate, jogDistanceMode);
+                }
+            }
         } catch (e) {
             console.error(`Invalid jog command: ${command}`);
         }
+    }
+
+    #isRealtimeCommand(command: Uint8Array) {
+        return command.length === 1 && GRBL.REALTIME_COMMANDS.has(command[0]);
+    }
+
+    // Removes all queued jog commands from motion command queue
+    #clearQueuedJogCommands() {
+        const textDecoder = new TextDecoder();
+        this.#motionCommandQueue = this.#motionCommandQueue.filter((command) =>
+            !textDecoder.decode(command).startsWith(GRBL.JOG_COMMAND_PREFIX));
     }
 }
 

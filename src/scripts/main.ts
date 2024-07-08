@@ -20,6 +20,7 @@ const VISUALISER_Z_COORDINATE_ID = "visualiser-z-coordinate";
 const JOG_CANCEL_BUTTON_ID = "cancel-jog-btn";
 const JOG_INCREMENT_SELECT_ID = "jog-increment-select";
 const JOG_FEEDRATE_SELECT_ID = "jog-feedrate-select";
+const SIMULATE_MOTION_CHECKBOX_ID = "simulate-motion-checkbox";
 
 const NOT_FOUND_ERROR_NAME = "NotFoundError";
 
@@ -50,14 +51,15 @@ function updateCoordinateText() {
     const xCoordinateHtml = document.getElementById(VISUALISER_X_COORDINATE_ID);
     const yCoordinateHtml = document.getElementById(VISUALISER_Y_COORDINATE_ID);
     const zCoordinateHtml = document.getElementById(VISUALISER_Z_COORDINATE_ID);
+    const digitsAfterDp = 2;
     if (xCoordinateHtml) {
-        xCoordinateHtml.innerHTML = machineState.pos.x.toString();
+        xCoordinateHtml.innerHTML = machineState.pos.x.toFixed(digitsAfterDp);
     }
     if (yCoordinateHtml) {
-        yCoordinateHtml.innerHTML = machineState.pos.y.toString();
+        yCoordinateHtml.innerHTML = machineState.pos.y.toFixed(digitsAfterDp);
     }
     if (zCoordinateHtml) {
-        zCoordinateHtml.innerHTML = machineState.pos.z.toString();
+        zCoordinateHtml.innerHTML = machineState.pos.z.toFixed(digitsAfterDp);
     }
     setTimeout(updateCoordinateText, 100);
 }
@@ -75,6 +77,7 @@ function addEventListeners() {
                 jogIncrement = parseInt((<HTMLSelectElement> document.getElementById(JOG_INCREMENT_SELECT_ID))?.value ?? DEFAULT_JOG_INCREMENT));
     document.getElementById(JOG_FEEDRATE_SELECT_ID)?.addEventListener("change", () =>
                 jogFeedrate = parseInt((<HTMLSelectElement> document.getElementById(JOG_FEEDRATE_SELECT_ID))?.value ?? DEFAULT_JOG_INCREMENT));
+    document.getElementById(SIMULATE_MOTION_CHECKBOX_ID)?.addEventListener("change", () => machineState.toggleMotionSimulation());
 }
 
 async function debounceJog(direction: Direction, timeout = 200) {
@@ -87,7 +90,7 @@ async function debounceJog(direction: Direction, timeout = 200) {
 }
 
 async function cancelJog() {
-    await writeCommand(port, GRBL.CANCEL_JOG_COMMAND);
+    await writeCommand(port, new Uint8Array([GRBL.CANCEL_JOG_COMMAND]));
 }
 
 async function openPort() {
@@ -125,7 +128,7 @@ async function beginReading(port) {
             for (const message of messages) {
                 machineState.registerMessage(message);
                 if (message.startsWith(GRBL.OK_MESSAGE) && commandQueue.length > 0) {
-                    await writeCommand(port, commandQueue.pop());
+                    await writeCommand(port, commandQueue.shift()!);
                 }
                 commandHistoryTextareaHtml.value += message;
             }
@@ -139,7 +142,7 @@ async function beginReading(port) {
 
 // Recommended max poll frequency is 5Hz (https://github.com/gnea/grbl/wiki/Grbl-v1.1-Interface#status-reporting)
 async function pollStatus(port) {
-    await writeCommand(port, GRBL.STATUS_REPORT_QUERY_COMMAND);
+    await writeCommand(port, new Uint8Array([GRBL.STATUS_REPORT_QUERY_COMMAND]));
     setTimeout(async () => await pollStatus(port), 250);
 }
 
