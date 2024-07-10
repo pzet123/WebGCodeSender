@@ -1,6 +1,6 @@
 import { Direction } from "./types";
 
-function getJogButtonId(direction: Direction): string {
+export function getJogButtonId(direction: Direction): string {
     switch (direction) {
         case Direction.Up:
             return "up-jog-control-btn";
@@ -14,11 +14,9 @@ function getJogButtonId(direction: Direction): string {
 }
 
 // TODO: Avoid rubber-banding user if they want to scroll up
-function updateTextAreaScrollTop(textAreaId: string) {
+export function updateTextAreaScrollTop(textAreaId: string) {
     const textArea = document.getElementById(textAreaId);
     if (textArea) {
         textArea.scrollTop = textArea.scrollHeight;
     }
 }
-
-export { getJogButtonId, updateTextAreaScrollTop };

@@ -105,7 +105,7 @@ async function openPort() {
             requestPortButton.innerHTML = `Request port (currently open: {pid = ${port.getInfo().usbProductId}, vid = ${port.getInfo().usbVendorId}})`;
         }
     } catch (e) {
-        if (e.name != NOT_FOUND_ERROR_NAME) { // NotFoundError suggests request port prompt was dismissed by the user.
+        if (e.name !== NOT_FOUND_ERROR_NAME) { // NotFoundError suggests request port prompt was dismissed by the user.
             console.error(`Failed to request port: ${e}`);
         }
     }
