@@ -1,14 +1,16 @@
 import { parseCommand } from "./gcodeParser";
 import * as GRBL from "./grbl";
-import { Vec3 } from "./types";
+import { Vec2, Vec3 } from "./types";
+import { arcAngle, arcLength, circumference } from "./mathUtil";
 
 const SIMULATION_UPDATE_INTERVAL_MS = 25;
 
 class MachineState {
 
     pos: Vec3;
-    feedRate: number;
+    feedrate: number;
     distanceMode: GRBL.DistanceMode;
+    arcCenterDistanceMode : GRBL.DistanceMode;
     unitMode: GRBL.UnitMode;
     motionMode: GRBL.MotionMode;
     state: GRBL.State;
@@ -20,6 +22,7 @@ class MachineState {
     #inMotion: boolean;
     #motionCommandQueue: Uint8Array[];
 
+    // Default GCode modes: https://github.com/gnea/grbl/blob/master/doc/markdown/commands.md#g---view-gcode-parser-state
     constructor() {
         this.pos = { x: 0, y: 0, z: 0 };
         this.distanceMode = GRBL.DistanceMode.Abs;
@@ -51,6 +54,8 @@ class MachineState {
         const commandText = textDecoder.decode(command);
         const motionVec: Partial<Vec3> = {};
         let isMotionCommand = false;
+        let arcRadius: number | undefined;
+        let arcCenter: Partial<Vec2> = {};
         if (commandText.startsWith("$")) {
             this.#pushBufferLine(command);
             this.#registerSystemCommand(command);
@@ -70,8 +75,17 @@ class MachineState {
                             motionVec[word[0].toLowerCase()] = word[1];
                             isMotionCommand = true;
                             break;
+                        case "R":
+                            arcRadius = word[1];
+                            break;
+                        case "I":
+                            arcCenter.x = word[1];
+                            break;
+                        case "J":
+                            arcCenter.y = word[1];
+                            break;
                         case "F":
-                            this.feedRate = word[1];
+                            this.feedrate = word[1];
                             break;
                     }
                 });
@@ -79,7 +93,7 @@ class MachineState {
                     if (this.#inMotion) {
                         this.#motionCommandQueue.push(command);
                     } else {
-                        this.#registerMotion(motionVec);
+                        this.#registerMotion(motionVec, arcRadius, arcCenter);
                     }
                 }
             } catch (e) {
@@ -173,17 +187,28 @@ class MachineState {
     // TODO: Handle all g codes
     #registerGCode(gCode: string) {
         switch (gCode) {
-            case "G0": case "G00":
+            case "G0":
+            case "G00":
                 this.motionMode = GRBL.MotionMode.Rapid;
                 break
-            case "G1": case "G01":
+            case "G1":
+            case "G01":
                 this.motionMode = GRBL.MotionMode.Linear;
+                break;
+            case "G2":
+            case "G02":
+                this.motionMode = GRBL.MotionMode.ClockwiseArc;
+                break;
+            case "G3":
+            case "G03":
+                this.motionMode = GRBL.MotionMode.CounterClockwiseArc;
                 break;
         }
     }
 
     // TODO: Simulate acceleraton to avoid the tool visualiser rubber-banding at the beginning and end of the motion.
-    #registerMotion(motionVec: Partial<Vec3>) {
+    #registerMotion(motionVec: Partial<Vec3>, arcRadius?: number, arcCenter?: Partial<Vec2>) {
+        this.#inMotion = true;
         switch (this.motionMode) {
             case GRBL.MotionMode.Rapid:
                 //TODO: Implement
@@ -192,22 +217,80 @@ class MachineState {
                 this.#beginLinearMotionSimulation(motionVec);
                 break;
             case GRBL.MotionMode.ClockwiseArc:
-                //TODO: Implement
+                this.#beginArcMotionSimulation(motionVec, true, arcRadius, arcCenter);
                 break;
             case GRBL.MotionMode.CounterClockwiseArc:
-                //TODO: Implement
+                this.#beginArcMotionSimulation(motionVec, false, arcRadius, arcCenter);
                 break;
         }
     }
 
+    #beginArcMotionSimulation(positionVec: Partial<Vec3>, isClockwise: boolean, arcRadius?: number, arcCenter?: Partial<Vec2>) {
+        if (positionVec.x != null && positionVec.y != null) {
+            if (this.distanceMode === GRBL.DistanceMode.Inc) {
+                positionVec.x += this.pos.x;
+                positionVec.y += this.pos.y;
+            }
+            if (arcRadius != null) {
+                this.#beginRadiusArcMotionSimulation(<Vec3> positionVec, isClockwise, arcRadius);
+            } else if (arcCenter?.x != null && arcCenter?.y != null) {
+                if (this.arcCenterDistanceMode === GRBL.DistanceMode.Inc) {
+                    arcCenter.x += this.pos.x;
+                    arcCenter.y += this.pos.y;
+                }
+                this.#beginCenterArcMotionSimulation(<Vec3> positionVec, isClockwise, <Vec2> arcCenter);
+            }
+        }
+    }
+
+    // TODO: Implement
+    #beginRadiusArcMotionSimulation(positionVec: Vec3, isClockwise: boolean, arcRadius: number) {
+
+    }
+
+    #beginCenterArcMotionSimulation(positionVec: Vec3, isClockwise: boolean, arcCenter: Vec2) {
+        const radius = Math.sqrt((positionVec.x - arcCenter.x) ** 2 + (positionVec.y - arcCenter.y) ** 2);
+        const circum = circumference(radius);
+        let totalDistance = arcLength({ x: this.pos.x, y: this.pos.y }, { x: positionVec.x, y: positionVec.y }, arcCenter);
+        if (!isClockwise) {
+            totalDistance = circum - totalDistance;
+        }
+        const arcStepLength = SIMULATION_UPDATE_INTERVAL_MS * (this.feedrate / 60000);
+        const angleOfRotation = (Math.PI * 2 * arcStepLength) / circum;
+        this.#simulateArcMotion({ x: this.pos.x, y: this.pos.y }, totalDistance, 0, isClockwise, arcCenter, angleOfRotation, arcStepLength);
+    }
+
+    #simulateArcMotion(currentPos: Vec2, totalDistance: number, distanceTravelled: number, isClockwise: boolean, arcCenter: Vec2, angleOfRotation: number, arcStepLength: number) {
+        const xOffset = this.pos.x - arcCenter.x;
+        const yOffset = this.pos.y - arcCenter.y;
+        // Convert to polar coordinates for simpler rotation
+        let angle = Math.atan2(yOffset, xOffset);
+        const mag = Math.sqrt(xOffset ** 2 + yOffset ** 2);
+        angle += isClockwise ? -angleOfRotation : angleOfRotation;
+        // Convert back to planar coordinates
+        const xInc = Math.cos(angle) * mag;
+        const yInc = Math.sin(angle) * mag;
+        this.pos.x = arcCenter.x + xInc;
+        this.pos.y = arcCenter.y + yInc;
+        distanceTravelled += arcStepLength;
+        if (this.#motionSimulationEnabled) {
+            if (distanceTravelled <= (totalDistance - arcStepLength)) {
+                this.#simulationTimeoutId = setTimeout(
+                    () => this.#simulateArcMotion(currentPos, totalDistance, distanceTravelled, isClockwise, arcCenter, angleOfRotation, arcStepLength),
+                    SIMULATION_UPDATE_INTERVAL_MS);
+            } else {
+                this.#endMotion();
+            }
+        }
+    }
+
     #beginLinearMotionSimulation(motionVec: Partial<Vec3>, isJog = false, feedrate?: number, distanceMode?: GRBL.DistanceMode) {
-        this.#inMotion = true;
-        feedrate ??= this.feedRate;
+        feedrate ??= this.feedrate;
         distanceMode ??= this.distanceMode;
         if (distanceMode === GRBL.DistanceMode.Abs) {
-            motionVec.x = motionVec.x !== undefined ? motionVec.x - this.pos.x : 0;
-            motionVec.y = motionVec.y !== undefined ? motionVec.y - this.pos.y : 0;
-            motionVec.z = motionVec.z !== undefined ? motionVec.z - this.pos.z : 0;
+            motionVec.x = motionVec.x != null ? motionVec.x - this.pos.x : 0;
+            motionVec.y = motionVec.y != null ? motionVec.y - this.pos.y : 0;
+            motionVec.z = motionVec.z != null ? motionVec.z - this.pos.z : 0;
         } else {
             motionVec.x ??= 0;
             motionVec.y ??= 0;
@@ -253,7 +336,7 @@ class MachineState {
         const commandText = new TextDecoder().decode(command);
         let jogDistanceMode = this.distanceMode;
         let jogUnitMode = this.unitMode;
-        let jogFeedRate = this.feedRate;
+        let jogFeedrate = this.feedrate;
         let jogMotionVec: Partial<Vec3> = {};
         try {
             const commandWords = parseCommand(commandText.substring(3));
@@ -275,7 +358,7 @@ class MachineState {
                         jogMotionVec[word[0].toLowerCase()] = word[1];
                         break;
                     case "F":
-                        jogFeedRate = word[1];
+                        jogFeedrate = word[1];
                         break;
                 }
             });
@@ -283,7 +366,8 @@ class MachineState {
                 if (this.#inMotion) {
                     this.#motionCommandQueue.push(command);
                 } else {
-                    this.#beginLinearMotionSimulation(jogMotionVec, true, jogFeedRate, jogDistanceMode);
+                    this.#inMotion = true;
+                    this.#beginLinearMotionSimulation(jogMotionVec, true, jogFeedrate, jogDistanceMode);
                 }
             }
         } catch (e) {
