@@ -2,13 +2,13 @@ import { Direction } from "./types";
 
 function getJogButtonId(direction: Direction): string {
     switch (direction) {
-        case Direction.UP:
+        case Direction.Up:
             return "up-jog-control-btn";
-        case Direction.DOWN:
+        case Direction.Down:
             return "down-jog-control-btn";
-        case Direction.LEFT:
+        case Direction.Left:
             return "left-jog-control-btn";
-        case Direction.RIGHT:
+        case Direction.Right:
             return "right-jog-control-btn";
     }
 }

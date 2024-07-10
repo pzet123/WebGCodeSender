@@ -1,6 +1,6 @@
 import { parseCommand } from "./gcodeParser";
 import * as GRBL from "./grbl";
-import { MotionMode, DistanceMode, UnitMode, Vec3 } from "./types";
+import { Vec3 } from "./types";
 
 const SIMULATION_UPDATE_INTERVAL_MS = 25;
 
@@ -8,9 +8,10 @@ class MachineState {
 
     pos: Vec3;
     feedRate: number;
-    distanceMode: DistanceMode;
-    unitMode: UnitMode;
-    motionMode: MotionMode;
+    distanceMode: GRBL.DistanceMode;
+    unitMode: GRBL.UnitMode;
+    motionMode: GRBL.MotionMode;
+    state: GRBL.State;
     #bufferLineCharCounts: number[];
     #numOfCharsInBuffer: number;
     #simulationTimeoutId: number | undefined;
@@ -21,9 +22,10 @@ class MachineState {
 
     constructor() {
         this.pos = { x: 0, y: 0, z: 0 };
-        this.distanceMode = DistanceMode.Abs;
-        this.motionMode = MotionMode.Linear;
-        this.unitMode = UnitMode.Milimeter;
+        this.distanceMode = GRBL.DistanceMode.Abs;
+        this.motionMode = GRBL.MotionMode.Linear;
+        this.unitMode = GRBL.UnitMode.Milimeter;
+        this.state = GRBL.State.Idle;
         this.#bufferLineCharCounts = [];
         this.#numOfCharsInBuffer = 0;
         this.#motionSimulationEnabled = false;
@@ -38,7 +40,7 @@ class MachineState {
     registerMessage(message: string) {
         if (message.startsWith(GRBL.OK_MESSAGE) || message.startsWith(GRBL.ERROR_MESSAGE)) {
             this.#popBufferLine();
-        } else if (message.indexOf("MPos:") != -1) {
+        } else if (GRBL.STATUS_REPORT_REGEX.test(message)) {
             this.#registerStatusReport(message);
         }
     }
@@ -113,7 +115,38 @@ class MachineState {
             this.pos.y = parseFloat(coordinates[1]);
             this.pos.z = parseFloat(coordinates[2]);
         }
-        GRBL.STATUS_REPORT_POS_REGEX.lastIndex = 0;
+
+        // Reference: https://github.com/gnea/grbl/blob/bfb67f0c7963fe3ce4aaf8a97f9009ea5a8db36e/grbl/report.c#L476
+        const stateMessage = GRBL.STATUS_REPORT_STATE_REGEX.exec(statusReport)?.[0];
+        switch (stateMessage) {
+            case "Idle":
+                this.state = GRBL.State.Idle;
+                break;
+            case "Run":
+                this.state = GRBL.State.Cycle;
+                break;
+            case "Hold":
+                this.state = GRBL.State.Hold;
+                break;
+            case "Jog":
+                this.state = GRBL.State.Jog;
+                break;
+            case "Home":
+                this.state = GRBL.State.Homing;
+                break;
+            case "Alarm":
+                this.state = GRBL.State.Alarm;
+                break;
+            case "Check":
+                this.state = GRBL.State.CheckMode;
+                break;
+            case "Door":
+                this.state = GRBL.State.SafetyDoor;
+                break;
+            case "Sleep":
+                this.state = GRBL.State.Sleep;
+                break;
+        }
     }
 
     // Reference: https://github.com/gnea/grbl/wiki/Grbl-v1.1-Commands
@@ -141,10 +174,10 @@ class MachineState {
     #registerGCode(gCode: string) {
         switch (gCode) {
             case "G0": case "G00":
-                this.motionMode = MotionMode.Rapid;
+                this.motionMode = GRBL.MotionMode.Rapid;
                 break
             case "G1": case "G01":
-                this.motionMode = MotionMode.Linear;
+                this.motionMode = GRBL.MotionMode.Linear;
                 break;
         }
     }
@@ -152,26 +185,26 @@ class MachineState {
     // TODO: Simulate acceleraton to avoid the tool visualiser rubber-banding at the beginning and end of the motion.
     #registerMotion(motionVec: Partial<Vec3>) {
         switch (this.motionMode) {
-            case MotionMode.Rapid:
+            case GRBL.MotionMode.Rapid:
                 //TODO: Implement
                 break;
-            case MotionMode.Linear:
+            case GRBL.MotionMode.Linear:
                 this.#beginLinearMotionSimulation(motionVec);
                 break;
-            case MotionMode.ClockwiseArc:
+            case GRBL.MotionMode.ClockwiseArc:
                 //TODO: Implement
                 break;
-            case MotionMode.CounterClockwiseArc:
+            case GRBL.MotionMode.CounterClockwiseArc:
                 //TODO: Implement
                 break;
         }
     }
 
-    #beginLinearMotionSimulation(motionVec: Partial<Vec3>, isJog = false, feedrate?: number, distanceMode?: DistanceMode) {
+    #beginLinearMotionSimulation(motionVec: Partial<Vec3>, isJog = false, feedrate?: number, distanceMode?: GRBL.DistanceMode) {
         this.#inMotion = true;
         feedrate ??= this.feedRate;
         distanceMode ??= this.distanceMode;
-        if (distanceMode === DistanceMode.Abs) {
+        if (distanceMode === GRBL.DistanceMode.Abs) {
             motionVec.x = motionVec.x !== undefined ? motionVec.x - this.pos.x : 0;
             motionVec.y = motionVec.y !== undefined ? motionVec.y - this.pos.y : 0;
             motionVec.z = motionVec.z !== undefined ? motionVec.z - this.pos.z : 0;
@@ -229,13 +262,13 @@ class MachineState {
                     case "G":
                         const gCode = word.join("");
                         if (gCode === "G20") {
-                            jogUnitMode = UnitMode.Inch;
+                            jogUnitMode = GRBL.UnitMode.Inch;
                         } else if (gCode === "G21") {
-                            jogUnitMode = UnitMode.Milimeter;
+                            jogUnitMode = GRBL.UnitMode.Milimeter;
                         } else if (gCode === "G90") {
-                            jogDistanceMode = DistanceMode.Abs;
+                            jogDistanceMode = GRBL.DistanceMode.Abs;
                         } else if (gCode === "G91") {
-                            jogDistanceMode = DistanceMode.Inc;
+                            jogDistanceMode = GRBL.DistanceMode.Inc;
                         }
                         break;
                     case "X": case "Y": case "Z":

@@ -68,10 +68,10 @@ function addEventListeners() {
     document.getElementById(REQUEST_PORT_BUTTON_ID)?.addEventListener("click", () => openPort());
     document.getElementById(SEND_GCODE_COMMAND_BUTTON_ID)?.addEventListener("click", () =>
                 sendTextCommand((<HTMLInputElement> document.getElementById(GCODE_COMMAND_TEXTBOX_ID))?.value));
-    document.getElementById(getJogButtonId(Direction.UP))?.addEventListener("mousedown", () => debounceJog(Direction.UP));
-    document.getElementById(getJogButtonId(Direction.DOWN))?.addEventListener("mousedown", () => debounceJog(Direction.DOWN));
-    document.getElementById(getJogButtonId(Direction.LEFT))?.addEventListener("mousedown", () => debounceJog(Direction.LEFT));
-    document.getElementById(getJogButtonId(Direction.RIGHT))?.addEventListener("mousedown", () => debounceJog(Direction.RIGHT));
+    document.getElementById(getJogButtonId(Direction.Up))?.addEventListener("mousedown", () => debounceJog(Direction.Up));
+    document.getElementById(getJogButtonId(Direction.Down))?.addEventListener("mousedown", () => debounceJog(Direction.Down));
+    document.getElementById(getJogButtonId(Direction.Left))?.addEventListener("mousedown", () => debounceJog(Direction.Left));
+    document.getElementById(getJogButtonId(Direction.Right))?.addEventListener("mousedown", () => debounceJog(Direction.Right));
     document.getElementById(JOG_CANCEL_BUTTON_ID)?.addEventListener("mousedown", () => cancelJog());
     document.getElementById(JOG_INCREMENT_SELECT_ID)?.addEventListener("change", () =>
                 jogIncrement = parseInt((<HTMLSelectElement> document.getElementById(JOG_INCREMENT_SELECT_ID))?.value ?? DEFAULT_JOG_INCREMENT));
@@ -170,22 +170,22 @@ async function sendTextCommand(commandText: string) {
 }
 
 async function jog(direction: Direction) {
-    let relative_coordinates = "X0 Y0";
+    let relativeCoordinates = "X0 Y0";
     switch (direction) {
-        case Direction.UP:
-            relative_coordinates = `X0 Y${jogIncrement}`;
+        case Direction.Up:
+            relativeCoordinates = `X0 Y${jogIncrement}`;
             break;
-        case Direction.DOWN:
-            relative_coordinates = `X0 Y${-jogIncrement}`;
+        case Direction.Down:
+            relativeCoordinates = `X0 Y${-jogIncrement}`;
             break;
-        case Direction.LEFT:
-            relative_coordinates = `X${-jogIncrement} Y0`;
+        case Direction.Left:
+            relativeCoordinates = `X${-jogIncrement} Y0`;
             break;
-        case Direction.RIGHT:
-            relative_coordinates = `X${jogIncrement} Y0`;
+        case Direction.Right:
+            relativeCoordinates = `X${jogIncrement} Y0`;
             break;
     }
-    await writeCommand(port, TEXT_ENCODER.encode(`$J=G91 ${relative_coordinates} F${jogFeedrate}\n`));
+    await writeCommand(port, TEXT_ENCODER.encode(`$J=G91 ${relativeCoordinates} F${jogFeedrate}\n`));
 }
 
 init();
