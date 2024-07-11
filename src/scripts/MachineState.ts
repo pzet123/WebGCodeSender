@@ -26,6 +26,7 @@ class MachineState {
     constructor() {
         this.pos = { x: 0, y: 0, z: 0 };
         this.distanceMode = GRBL.DistanceMode.Abs;
+        this.arcCenterDistanceMode = GRBL.DistanceMode.Inc;
         this.motionMode = GRBL.MotionMode.Linear;
         this.unitMode = GRBL.UnitMode.Milimeter;
         this.state = GRBL.State.Idle;
