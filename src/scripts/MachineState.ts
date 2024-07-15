@@ -233,26 +233,41 @@ class MachineState {
                 positionVec.y += this.pos.y;
             }
             if (arcRadius != null) {
-                this.#beginRadiusArcMotionSimulation(<Vec3> positionVec, isClockwise, arcRadius);
+                this.#beginRadiusArcMotionSimulation(positionVec as Vec3, isClockwise, arcRadius);
             } else if (arcCenter?.x != null && arcCenter?.y != null) {
                 if (this.arcCenterDistanceMode === GRBL.DistanceMode.Inc) {
                     arcCenter.x += this.pos.x;
                     arcCenter.y += this.pos.y;
                 }
-                this.#beginCenterArcMotionSimulation(<Vec3> positionVec, isClockwise, <Vec2> arcCenter);
+                this.#beginCenterArcMotionSimulation(positionVec as Vec3, isClockwise, <Vec2> arcCenter);
             }
         }
     }
 
-    // TODO: Implement
-    #beginRadiusArcMotionSimulation(positionVec: Vec3, isClockwise: boolean, arcRadius: number) {
-
+    // Reference implementation: https://github.com/gnea/grbl/blob/bfb67f0c7963fe3ce4aaf8a97f9009ea5a8db36e/grbl/gcode.c#L696
+    #beginRadiusArcMotionSimulation(targetPosVec: Vec3, isClockwise: boolean, arcRadius: number) {
+        if (!(targetPosVec.x === this.pos.x && targetPosVec.y === this.pos.y)) {
+            const targetVector = { x: targetPosVec.x - this.pos.x, y: targetPosVec.y - this.pos.y };
+            const centerDispSquared = 4.0 * arcRadius ** 2 - targetVector.x ** 2 - targetVector.y ** 2;
+            if (centerDispSquared >= 0) {
+                let centerDispScaleFactor = -Math.sqrt(centerDispSquared) / Math.sqrt(targetVector.x ** 2 + targetVector.y ** 2);
+                if (!isClockwise) {
+                    centerDispScaleFactor = -centerDispScaleFactor;
+                }
+                if (arcRadius < 0) { // A negative radius in G Code is used to denote, out of the two possible arcs, pick the arc with angle > 180.
+                    centerDispScaleFactor = -centerDispScaleFactor;
+                }
+                const centerX = this.pos.x + 0.5 * (targetVector.x - targetVector.y * centerDispScaleFactor);
+                const centerY = this.pos.y + 0.5 * (targetVector.y + targetVector.x * centerDispScaleFactor);
+                this.#beginCenterArcMotionSimulation(targetPosVec, isClockwise, { x: centerX, y: centerY });
+            }
+        }
     }
 
-    #beginCenterArcMotionSimulation(positionVec: Vec3, isClockwise: boolean, arcCenter: Vec2) {
-        const radius = Math.sqrt((positionVec.x - arcCenter.x) ** 2 + (positionVec.y - arcCenter.y) ** 2);
+    #beginCenterArcMotionSimulation(targetPosVec: Vec3, isClockwise: boolean, arcCenter: Vec2) {
+        const radius = Math.sqrt((targetPosVec.x - arcCenter.x) ** 2 + (targetPosVec.y - arcCenter.y) ** 2);
         const circum = circumference(radius);
-        let totalDistance = arcLength({ x: this.pos.x, y: this.pos.y }, { x: positionVec.x, y: positionVec.y }, arcCenter);
+        let totalDistance = arcLength({ x: this.pos.x, y: this.pos.y }, { x: targetPosVec.x, y: targetPosVec.y }, arcCenter);
         if (!isClockwise) {
             totalDistance = circum - totalDistance;
         }
@@ -261,7 +276,7 @@ class MachineState {
         this.#simulateArcMotion({ x: this.pos.x, y: this.pos.y }, totalDistance, 0, isClockwise, arcCenter, angleOfRotation, arcStepLength);
     }
 
-    #simulateArcMotion(currentPos: Vec2, totalDistance: number, distanceTravelled: number, isClockwise: boolean, arcCenter: Vec2, angleOfRotation: number, arcStepLength: number) {
+    #simulateArcMotion(currentPosVec: Vec2, totalDistance: number, distanceTravelled: number, isClockwise: boolean, arcCenter: Vec2, angleOfRotation: number, arcStepLength: number) {
         const xOffset = this.pos.x - arcCenter.x;
         const yOffset = this.pos.y - arcCenter.y;
         // Convert to polar coordinates for simpler rotation
@@ -277,7 +292,7 @@ class MachineState {
         if (this.#motionSimulationEnabled) {
             if (distanceTravelled <= (totalDistance - arcStepLength)) {
                 this.#simulationTimeoutId = setTimeout(
-                    () => this.#simulateArcMotion(currentPos, totalDistance, distanceTravelled, isClockwise, arcCenter, angleOfRotation, arcStepLength),
+                    () => this.#simulateArcMotion(currentPosVec, totalDistance, distanceTravelled, isClockwise, arcCenter, angleOfRotation, arcStepLength),
                     SIMULATION_UPDATE_INTERVAL_MS);
             } else {
                 this.#endMotion();
@@ -303,19 +318,19 @@ class MachineState {
             const axesFeedrate = { x: (motionVec.x / totalDistance) * feedratePerMs, y: (motionVec.y / totalDistance) * feedratePerMs, z: (motionVec.z / totalDistance) * feedratePerMs };
             const stepVec = { x: axesFeedrate.x * SIMULATION_UPDATE_INTERVAL_MS, y: axesFeedrate.y * SIMULATION_UPDATE_INTERVAL_MS, z: axesFeedrate.z * SIMULATION_UPDATE_INTERVAL_MS };
             const stepDistance = Math.sqrt(stepVec.x ** 2 + stepVec.y ** 2 + stepVec.z ** 2);
-            this.#simulateLinearMotion({ ...this.pos }, stepVec, stepDistance, totalDistance, 0, isJog);
+            this.#simulateLinearMotion({ ...this.pos }, stepVec, stepDistance, totalDistance, isJog);
         }
     }
 
-    #simulateLinearMotion(startVec: Vec3, stepVec: Vec3, stepDistance: number, totalDistance: number, distanceTravelled: number, isJog: boolean) {
+    #simulateLinearMotion(startVec: Vec3, stepVec: Vec3, stepDistance: number, totalDistance: number, isJog: boolean) {
         this.pos.x += stepVec.x;
         this.pos.y += stepVec.y;
         this.pos.z += stepVec.z;
-        distanceTravelled = Math.sqrt((this.pos.x - startVec.x) ** 2 + (this.pos.y - startVec.y) ** 2 + (this.pos.z - startVec.z) ** 2);
+        const distanceTravelled = Math.sqrt((this.pos.x - startVec.x) ** 2 + (this.pos.y - startVec.y) ** 2 + (this.pos.z - startVec.z) ** 2);
         if (this.#motionSimulationEnabled) {
             if (distanceTravelled < (totalDistance - stepDistance)) {
                 const timeoutId = setTimeout(() =>
-                    this.#simulateLinearMotion(startVec, stepVec, stepDistance, totalDistance, distanceTravelled, isJog),
+                    this.#simulateLinearMotion(startVec, stepVec, stepDistance, totalDistance, isJog),
                     SIMULATION_UPDATE_INTERVAL_MS);
                 this.#setSimulationTimeoutId(timeoutId, isJog);
             } else {
